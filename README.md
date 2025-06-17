@@ -13,9 +13,9 @@ This application creates a knowledge network encapsulating the latest knowledge 
 
 The NLM Cell Knowledge Network aims to connect this experiment data and augment it with marker data computationally derived from exeuction of the [NSForest](https://github.com/JCVenterInstitute/NSForest/tree/master) program which calculates both the necessary and sufficient genes that when present define the cell cluster, resolved to a cell ontological type using semantic terms updated and maintained at the [Cell Ontology](https://www.ebi.ac.uk/ols4/ontologies/cl) 
 
-## Infrastructure Architecture
+## NLM Cell KN Infrastructure Architecture
 
-[NLM Cell KN Infrastructure Architecture Diagram]
+<img src="_static/NLM_Cell_KN_Infrastructure.png" width 750>
 
 ## Repositories of Interest
 
@@ -27,21 +27,26 @@ The NLM Cell Knowledge Network aims to connect this experiment data and augment 
 
 ## Navigating NLM Cell KN MVP
 
-[Overall picture]
+### NLM Cell KN MVP Landing Page
+<img src="_static/NLM_Cell_KN_MVP_Search_Window.png" width 750>
 
-[Search]
+### NLM Cell KN MVP Browse Database
+<img src="_static/NLM_Cell_KN_MVP_Browse_Database.png" width 750>
 
-[Browse Database]
+### NLM Cell KN MVP Explore the Tree
+<img src="_static/NLM_Cell_KN_MVP_Explore_the_Tree.png" width 750>
 
-[Explore the Tree]
+### NLM Cell KN MVP Gene Symbol KCKN3 Landing Page
+<img src="_static/NLM_Cell_KN_MVP_Gene_Symbol_KCKN3.png" width 750>
 
-[Inspect Data Collections]
+### NLM Cell KN MVP Inspect Data Collections
+<img src="_static/NLM_Cell_KN_MVP_Inspect_Data_Collections.png" width 750>
 
-[Schema]
+### NLM Cell KN MVP Schema
+<img src="_static/NLM_Cell_KN_MVP_Schema.png" width 750
 
-[About]
-
-
+### NLM Cell KN MVP About
+<img src="_static/NLM_Cell_KN_MVP_About.png" width 750>
 
 ## Additional repositories
 
