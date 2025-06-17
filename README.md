@@ -15,7 +15,7 @@ The NLM Cell Knowledge Network aims to connect this experiment data and augment 
 
 ## NLM Cell KN Infrastructure Architecture
 
-<img src="_static/NLM_Cell_KN_Infrastructure.png" width 750>
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Infrastructure.png)
 
 ## Repositories of Interest
 
@@ -27,26 +27,30 @@ The NLM Cell Knowledge Network aims to connect this experiment data and augment 
 
 ## Navigating NLM Cell KN MVP
 
-### NLM Cell KN MVP Landing Page
-<img src="_static/NLM_Cell_KN_MVP_Search_Window.png" width 750>
+### NLM Cell KN MVP Search Window
+
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Search_Window.png)
 
 ### NLM Cell KN MVP Browse Database
-<img src="_static/NLM_Cell_KN_MVP_Browse_Database.png" width 750>
+
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Browse_Database.png)
 
 ### NLM Cell KN MVP Explore the Tree
-<img src="_static/NLM_Cell_KN_MVP_Explore_the_Tree.png" width 750>
+
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Explore_the_Tree.png)
 
 ### NLM Cell KN MVP Gene Symbol KCKN3 Landing Page
-<img src="_static/NLM_Cell_KN_MVP_Gene_Symbol_KCKN3.png" width 750>
+
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Gene_Symbol_KCKN3.png)
 
 ### NLM Cell KN MVP Inspect Data Collections
-<img src="_static/NLM_Cell_KN_MVP_Inspect_Data_Collections.png" width 750>
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Inspect_Data_Collections.png)
 
 ### NLM Cell KN MVP Schema
-<img src="_static/NLM_Cell_KN_MVP_Schema.png" width 750
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Schema.png)
 
 ### NLM Cell KN MVP About
-<img src="_static/NLM_Cell_KN_MVP_About.png" width 750>
+![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_About.png)
 
 ## Additional repositories
 
