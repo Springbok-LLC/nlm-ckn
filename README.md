@@ -15,7 +15,7 @@ The NLM Cell Knowledge Network aims to connect this experiment data and augment 
 
 ## NLM Cell KN Infrastructure Architecture
 
-![](https://github.com/NIH-NLM/cell-kn-mvp/blob/main/docs/_static/NLM_Cell_KN_Infrastructure.png)
+<img src="docs/_static/NLM_Cell_KN_Infrastructure.png" width="750" />
 
 ## Repositories of Interest
 
@@ -27,26 +27,55 @@ The NLM Cell Knowledge Network aims to connect this experiment data and augment 
 
 ## Navigating NLM Cell KN MVP
 
-![NLM Cell KN MVP Search](docs/_static/NLM_Cell_KN_MVP_Search_Window.png)
+### Search Landing Page - A good place to start
 
-![NLM Cell KN MVP Browse](docs/_static/NLM_Cell_KN_MVP_Browse_Database.png)
+Here you can enter any term within any of the data collections
 
-![NLM Cell KN MVP Explore](docs/_static/NLM_Cell_KN_MVP_Explore_the_Tree.png)
+<img src="docs/_static/NLM_Cell_KN_MVP_Search_Window.png" width="750" />
 
-![NLM Cell KN MVP Gene Symbol KCKN3](docs/_static/NLM_Cell_KN_MVP_Gene_Symbol_KCKN3.png)
+### Browse the Database - Another place to begin
 
-![NLM Cell KN MVP Inspect](docs/_static/NLM_Cell_KN_MVP_Inspect_Data_Collections.png)
+Here with this Sunburst Graph, you can navigate and browse by organism, tissue and cell type
 
-![NLM Cell KN MVP Schema](docs/_static/NLM_Cell_KN_MVP_Schema.png)
+<img src="docs/_static/NLM_Cell_KN_MVP_Browse_Database.png" width="750" />
 
-![NLM Cell KN MVP About](docs/_static/NLM_Cell_KN_MVP_About.png)
+### Alternative view of the Sunburst Graph as a Tree
 
-## Additional repositories
+An alternative view of the sunburst graph, you can explore the tree - same information - different navigational style
+
+<img src="docs/_static/NLM_Cell_KN_MVP_Explore_the_Tree.png" width="750" />
+
+### Landing page for a Gene Symbol
+
+When you get to a gene of interest, or an item of interest, you can further explore the graphs and the content, with links out to source information (e.g. NCBI Gene)
+
+<img src="docs/_static/NLM_Cell_KN_MVP_Gene_Symbol_KCKN3.png" width="750" />
+
+### Inspect Data Collections
+
+Exploring can also begin with the available data collections
+
+<img src="docs/_static/NLM_Cell_KN_MVP_Inspect_Data_Collections.png" width="750" />
+
+### The NLM Cell MVP Schema
+
+You can see the relationships held in the graph by looking at the static schema.  
+
+<img src="docs/_static/NLM_Cell_KN_MVP_Schema.png" width="750" />
+
+### About the NLM Cell KN MVP
+<img src="docs/_static/NLM_Cell_KN_MVP_About.png" width="750" />
+
+## Additional repositories of interest
+
+### The Single Cell Silhouette Python Package
+
+These repositories: a python package and its partner Nextflow workflow are used to assess the quality of the dataset clusters. It does so by creating an interactive html chart using plotly to allow the team to explore the author submitted clusters and others to determine inclusion criteria for the repository.
 
 * [NLM Cell KN SCsilhouette Score Package](https://github.com/NIH-NLM/scsilhouette#README)
-  
 * [NLM Cell KN Silhouette Score Nextflow Workflow](https://github.com/NIH-NLM/scsilhouette-nf#README))
 
+These repositories: a python package created at the JCVenter institute and its partner Nextflow workflow are used to calculate the NS (Necessary and Sufficient Gene Markers) for clusters.   The F-Beta score is used as a quality control metric for consideration as well as understanding the robustness of the markers.
 * [NSForest Package](https://github.com/JCVenterInstitute/NSForest#README)
 
 * [NLM Cell KN NS Forest Nextflow Workflow](https://github.com/NIH-NLM/nsforest-nf#README)
