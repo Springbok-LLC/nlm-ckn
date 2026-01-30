@@ -7,6 +7,26 @@ human-readable gene symbols using the NIH NLM cell-kn gene mapping file.
 Repository: https://github.com/NIH-NLM/cell-kn
 Mapping file: data/biomart/gene_mapping.csv
 
+Quick Start (NSForest Workflow)
+--------------------------------
+from gene_mapping_utils import load_gene_mapping, create_mapping_dict
+
+# Load mapping (cached for speed)
+gene_mapping = load_gene_mapping()
+ensg_to_symbol = create_mapping_dict(gene_mapping)
+
+# Add gene symbols to adata for plotting
+adata.var['gene_symbol'] = [ensg_to_symbol.get(gene, gene) for gene in adata.var_names]
+
+# Create markers_dict with ENSG IDs (matches adata.var_names)
+markers_dict = dict(zip(results_to_plot["clusterName"], 
+                       results_to_plot["NSForest_markers"]))
+
+# Plot with gene symbols displayed
+import nsforest as ns
+ns.pl.dotplot(adata, markers_dict, cluster_header, 
+              dendrogram=True, gene_symbols='gene_symbol')
+
 Author: NIH NLM cell-kn
 License: MIT (or match repository license)
 """
@@ -277,28 +297,60 @@ if __name__ == "__main__":
 COMPLETE WORKFLOW FOR NSFOREST RESULTS
 ---------------------------------------
 
+# 0. Download utility (one-time)
+import urllib.request
+urllib.request.urlretrieve(
+    "https://raw.githubusercontent.com/NIH-NLM/cell-kn/main/utils/gene_mapping_utils.py",
+    "gene_mapping_utils.py"
+)
+
+# 1. Import utilities
 import pandas as pd
 from gene_mapping_utils import load_gene_mapping, create_mapping_dict
 
-# 1. Load your NSForest results
-results_to_plot = pd.read_pickle("nsforest_results.pkl")
-
 # 2. Load gene mapping (cached for speed)
-gene_mapping = load_gene_mapping(cache_file='gene_mapping.csv')
+gene_mapping = load_gene_mapping()
 ensg_to_symbol = create_mapping_dict(gene_mapping)
+print(f"Loaded {len(gene_mapping)} gene mappings")
 
-# 3. Map ENSG IDs to gene symbols (FAST)
-results_to_plot['gene_names'] = [
-    [ensg_to_symbol.get(gene, gene) for gene in markers]
-    for markers in results_to_plot['NSForest_markers']
-]
+# 3. Add gene symbols to adata
+# This allows scanpy to display readable gene names on plots
+adata.var['gene_symbol'] = [ensg_to_symbol.get(gene, gene) for gene in adata.var_names]
+print(f"Added gene symbols to adata.var['gene_symbol']")
 
-# 4. Create markers_dict for plotting
+# 4. Create markers_dict with ENSG IDs (matches adata.var_names)
+# IMPORTANT: Use NSForest_markers (ENSG IDs), NOT mapped gene names
 markers_dict = dict(zip(results_to_plot["clusterName"], 
-                       results_to_plot["gene_names"]))
+                       results_to_plot["NSForest_markers"]))
 
-# 5. Plot with readable gene names
+print(f"markers_dict created with {len(markers_dict)} clusters")
+
+# 5. Plot with readable gene symbols displayed
+# The gene_symbols='gene_symbol' parameter tells scanpy to display
+# gene symbols on the plot while using ENSG IDs to look up the data
 import nsforest as ns
-ns.pl.dotplot(adata, markers_dict, cluster_header, dendrogram=True, 
-              save="svg", output_folder=output_folder)
+
+ns.pl.dotplot(adata, markers_dict, cluster_header, 
+              dendrogram=True, 
+              use_raw=False,
+              gene_symbols='gene_symbol',  # Display symbols on plot
+              save="svg", 
+              output_folder=output_folder,
+              outputfilename_suffix=outputfilename_prefix)
+
+ns.pl.stackedviolin(adata, markers_dict, cluster_header, 
+                    dendrogram=True, 
+                    use_raw=False,
+                    gene_symbols='gene_symbol',  # Display symbols on plot
+                    save="svg", 
+                    output_folder=output_folder,
+                    outputfilename_suffix=outputfilename_prefix)
+
+ns.pl.matrixplot(adata, markers_dict, cluster_header, 
+                 dendrogram=True, 
+                 use_raw=False,
+                 gene_symbols='gene_symbol',  # Display symbols on plot
+                 save="svg", 
+                 output_folder=output_folder,
+                 outputfilename_suffix=outputfilename_prefix)
 """
