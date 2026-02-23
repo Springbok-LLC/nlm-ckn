@@ -1,4 +1,4 @@
-# NLM Cell Knowledge Network MVP
+# NLM Cell Knowledge Network
 
 The __National Library of Medicine (NLM) Cell Knowledge Network__ [`http://cell-kn-mvp.org/`](http://cell-kn-mvp.org/) is a knowledgebase about cell characteristics (phenotypes) emerging from single cell technologies, integrated with other sources of trusted knowledge, sourced from:
 
@@ -13,7 +13,7 @@ This application creates a knowledge network encapsulating the latest knowledge 
 
 The NLM Cell Knowledge Network aims to connect these experimental data augmented with characterizing marker genes computationally derived from the [NS-Forest](https://github.com/JCVenterInstitute/NSForest/tree/master) machine learning method, which identifies the necessary and sufficient marker genes that define the data-driven cell type cluster, resolved to a cell ontological type using semantic terms updated and maintained at the [Cell Ontology](https://www.ebi.ac.uk/ols4/ontologies/cl).
 
-__*This resource is under active development. To contribute, please open an [issue](https://github.com/NIH-NLM/cell-kn-mvp/issues) on this Github repository.*__
+__*This resource is under active development. To contribute, please open an [issue](https://github.com/NIH-NLM/cell-kn/issues) on this Github repository.*__
 
 ## NLM Cell KN Infrastructure Architecture
 
@@ -29,7 +29,7 @@ __*This resource is under active development. To contribute, please open an [iss
 
 * [NLM Cell KN User Interface](https://github.com/NIH-NLM/cell-kn-mvp-ui#README)
 
-## Navigating NLM Cell KN MVP
+## Navigating NLM Cell KN
 
 ### Search Landing Page - A good place to start
 
@@ -61,13 +61,13 @@ Exploring can also begin with the available data collections.
 
 <img src="docs/_static/NLM_Cell_KN_MVP_Inspect_Data_Collections.png" width="750" />
 
-### The NLM Cell MVP Schema
+### The NLM Cell Schema
 
 You can see the relationships held in the graph by looking at the static schema.  
 
 <img src="docs/_static/NLM_Cell_KN_MVP_Schema.png" width="750" />
 
-### About the NLM Cell KN MVP
+### About the NLM Cell KN
 
 <img src="docs/_static/NLM_Cell_KN_MVP_About.png" width="750" />
 
