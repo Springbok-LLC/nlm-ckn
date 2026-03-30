@@ -16,15 +16,16 @@ Usage:
 import csv
 import glob
 import os
-import shutil
 from pathlib import Path
 
 # Paths relative to repo root
+GITHUB_RAW = "https://raw.githubusercontent.com/NIH-NLM/cell-kn/main"
+GITHUB_PREVIEW = "https://htmlpreview.github.io/?https://github.com/NIH-NLM/cell-kn/blob/main"
+
 REPO_ROOT = Path(__file__).parent.parent
 DATA_DIR = REPO_ROOT / "data" / "prod"
 DOCS_DIR = REPO_ROOT / "docs"
 TISSUES_DIR = DOCS_DIR / "tissues"
-REPORTS_DIR = DOCS_DIR / "_static" / "reports"
 
 # Columns to extract from CSV
 COLUMNS = [
@@ -50,12 +51,19 @@ def find_master_csvs():
     pattern = str(DATA_DIR / "**" / "*master_dataset_summary.csv")
     return sorted(glob.glob(pattern, recursive=True))
 
-
-def find_html_report(csv_path):
-    """Find the silhouette_fscore_summary.html in the same directory as the CSV."""
+def find_all_viz_files(csv_path):
+    """Find all HTML and SVG files in the same directory as the CSV."""
     csv_dir = os.path.dirname(csv_path)
-    htmls = glob.glob(os.path.join(csv_dir, "*silhouette_fscore_summary.html"))
-    return htmls[0] if htmls else None
+    htmls = glob.glob(os.path.join(csv_dir, "*.html"))
+    svgs = glob.glob(os.path.join(csv_dir, "*.svg"))
+    return sorted(htmls + svgs)
+
+def github_url(filepath):
+    """Build a GitHub URL for a file in the repo."""
+    rel = os.path.relpath(filepath, REPO_ROOT)
+    if filepath.endswith('.html'):
+        return f"{GITHUB_PREVIEW}/{rel}"
+    return f"{GITHUB_RAW}/{rel}"
 
 
 def read_csv_row(csv_path):
@@ -108,6 +116,7 @@ def generate_tissue_rst(tissue, datasets):
     lines.append("   <tr>")
     lines.append("     <th>Dataset</th>")
     lines.append("     <th>Collection</th>")
+    lines.append("     <th>Dataset Title</th>")
     lines.append("     <th>Explorer</th>")
     lines.append("     <th>Cells</th>")
     lines.append("     <th>Clusters</th>")
@@ -123,8 +132,11 @@ def generate_tissue_rst(tissue, datasets):
     for ds in datasets:
         author = ds.get("first_author", "Unknown")
         year = ds.get("year", "")
-        dataset_label = f"{author} {year}"
+        journal = ds.get("journal", "")
+        dataset_label = f"{author} ({journal}) {year}" if journal else f"{author} {year}"
         collection_url = ds.get("collection_url", "#")
+        dataset_title = ds.get("dataset_title", "")
+        dt_display = dataset_title[:50] + "..." if len(dataset_title) > 50 else dataset_title
         explorer_url = ds.get("explorer_url", "#")
         collection_name = ds.get("collection_name", "")
         n_cells = format_number(ds.get("n_cells", ""))
@@ -136,9 +148,8 @@ def generate_tissue_rst(tissue, datasets):
 
         # Report link
         report_link = ""
-        if ds.get("_report_static_path"):
-            report_path = ds["_report_static_path"]
-            report_link = f'<a href="../_static/reports/{report_path}" target="_blank">View Report</a>'
+        if ds.get("_report_url"):
+            report_link = f'<a href="{ds["_report_url"]}" target="_blank">View Report</a>'
 
         # Truncate collection name for display
         coll_display = collection_name[:50] + "..." if len(collection_name) > 50 else collection_name
@@ -146,6 +157,7 @@ def generate_tissue_rst(tissue, datasets):
         lines.append("   <tr>")
         lines.append(f'     <td><strong>{dataset_label}</strong></td>')
         lines.append(f'     <td><a href="{collection_url}" target="_blank" title="{collection_name}">{coll_display}</a></td>')
+        lines.append(f'     <td title="{dataset_title}">{dt_display}</td>')
         lines.append(f'     <td><a href="{explorer_url}" target="_blank">Explore</a></td>')
         lines.append(f"     <td>{n_cells}</td>")
         lines.append(f"     <td>{n_clusters}</td>")
@@ -159,6 +171,50 @@ def generate_tissue_rst(tissue, datasets):
     lines.append("   </tbody>")
     lines.append("   </table>")
     lines.append("   </div>")
+    lines.append("")
+
+    # --- Per Dataset Visualizations ---
+    lines.append("Visualizations")
+    lines.append("-" * len("Visualizations"))
+    lines.append("")
+    lines.append(".. raw:: html")
+    lines.append("")
+    for ds in datasets:
+        author = ds.get("first_author", "Unknown")
+        journal = ds.get("journal", "")
+        year = ds.get("year", "")
+        dt = ds.get("dataset_title", "")
+        label = f"{author} ({journal}) {year} - {dt}" if journal else f"{author} {year} - {dt}"
+
+        viz_files = ds.get("_viz_files", {})
+        if not viz_files:
+            continue
+
+        lines.append(f'   <details><summary><strong>{label}</strong></summary>')
+        lines.append('   <div class="viz-links">')
+
+        # Group by category
+        categories = {
+            "Quality Boxplots": [f for f in viz_files if "boxplot_" in os.path.basename(f)],
+            "Scatter Plots": [f for f in viz_files if "scatter_" in os.path.basename(f)],
+            "Distributions": [f for f in viz_files if "distribution_" in os.path.basename(f)],
+            "Gene Expression": [f for f in viz_files if any(x in os.path.basename(f) for x in ["dotplot", "matrixplot"])],
+            "Violin Plots": [f for f in viz_files if "stacked_violin" in os.path.basename(f)],
+            "Histograms": [f for f in viz_files if "hist_" in os.path.basename(f)],
+            "Dendrogram": [f for f in viz_files if "dendrogram" in os.path.basename(f)],
+            "Summary": [f for f in viz_files if "silhouette_fscore" in os.path.basename(f)],
+        }
+        for cat_name, files in categories.items():
+            if files:
+                links = " | ".join(
+                    f'<a href="{github_url(f)}" target="_blank">{os.path.basename(f)}</a>'
+                    for f in sorted(files)
+                )
+                lines.append(f'   <p><strong>{cat_name}:</strong> {links}</p>')
+                
+        lines.append('   </div>')
+        lines.append('   </details>')
+        
     lines.append("")
 
     # --- Reference Selection Form ---
@@ -289,7 +345,6 @@ def main():
 
     # Create output directories
     TISSUES_DIR.mkdir(parents=True, exist_ok=True)
-    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Find all master CSV files
     csv_files = find_master_csvs()
@@ -317,16 +372,13 @@ def main():
             print(f"  WARNING: Cannot determine tissue for: {csv_path}")
             continue
 
-        # Find and copy the HTML report
-        html_report = find_html_report(csv_path)
-        if html_report:
-            report_filename = f"{tissue}_{os.path.basename(html_report)}"
-            dest = REPORTS_DIR / report_filename
-            shutil.copy2(html_report, dest)
-            row["_report_static_path"] = report_filename
-            print(f"  Copied report: {report_filename}")
-        else:
-            row["_report_static_path"] = ""
+        # Find all viz files and build GitHub URLs
+        viz_files = find_all_viz_files(csv_path)
+        row["_viz_files"] = viz_files
+
+        # Find silhouette_fscore_summary for the report link
+        summary_html = [f for f in viz_files if "silhouette_fscore_summary.html" in f]
+        row["_report_url"] = github_url(summary_html[0]) if summary_html else ""
 
         tissues.setdefault(tissue, []).append(row)
 
@@ -348,7 +400,6 @@ def main():
     print(f"  Generated: index.rst")
 
     print(f"\nDone! Generated {len(tissues)} tissue pages + index.rst")
-    print(f"Reports copied to: {REPORTS_DIR}")
     print(f"\nNext: cd docs && make html")
 
 
