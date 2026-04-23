@@ -1,0 +1,80 @@
+name: Sync to partner repo
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: cell-kn
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Resolve target repo
+        id: target
+        env:
+          CURRENT_REPO: ${{ github.repository }}
+        run: |
+          if [ "$CURRENT_REPO" = "Springbok-LLC/cell-kn" ]; then
+            echo "repo=NIH-NLM/cell-kn" >> "$GITHUB_OUTPUT"
+            echo "branch=sync/from-springbok" >> "$GITHUB_OUTPUT"
+            echo "label=Springbok → NIH" >> "$GITHUB_OUTPUT"
+          else
+            echo "repo=Springbok-LLC/cell-kn" >> "$GITHUB_OUTPUT"
+            echo "branch=sync/from-nih" >> "$GITHUB_OUTPUT"
+            echo "label=NIH → Springbok" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if target main is already up to date
+        id: check
+        env:
+          TARGET_REPO: ${{ steps.target.outputs.repo }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git remote add target https://x-access-token:${APP_TOKEN}@github.com/${TARGET_REPO}.git
+          git fetch target main
+          if git merge-base --is-ancestor HEAD FETCH_HEAD; then
+            echo "Target main already contains all commits — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push sync branch to target
+        if: steps.check.outputs.skip != 'true'
+        env:
+          SYNC_BRANCH: ${{ steps.target.outputs.branch }}
+        run: |
+          git push target HEAD:refs/heads/${SYNC_BRANCH} --force
+
+      - name: Open PR in target if none exists
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_REPO: ${{ steps.target.outputs.repo }}
+          SYNC_BRANCH: ${{ steps.target.outputs.branch }}
+          CURRENT_REPO: ${{ github.repository }}
+          SYNC_LABEL: ${{ steps.target.outputs.label }}
+        run: |
+          count=$(gh pr list \
+            --repo "$TARGET_REPO" \
+            --head "$SYNC_BRANCH" \
+            --state open \
+            --json number --jq length)
+          if [ "$count" -eq 0 ]; then
+            gh pr create \
+              --repo "$TARGET_REPO" \
+              --head "$SYNC_BRANCH" \
+              --base main \
+              --title "sync: ${SYNC_LABEL}" \
+              --body "Automated sync from [${CURRENT_REPO}](https://github.com/${CURRENT_REPO}) main."
+          fi
