@@ -109,9 +109,7 @@ def build_release_zip(
             seen_names[name] = src
             zf.write(src, arcname=name)
 
-        zf.writestr(
-            "hubmap_urls.txt", "\n".join(hubmap_urls) + ("\n" if hubmap_urls else "")
-        )
+        zf.writestr("hubmap_urls.txt", HUBMAP_URLS_FILE.read_bytes())
 
     return zip_path
 
