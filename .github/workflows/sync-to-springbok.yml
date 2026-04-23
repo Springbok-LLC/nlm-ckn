@@ -1,0 +1,74 @@
+name: Staging to Upstream Sync
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  sync-process:
+    runs-on: ubuntu-latest
+    # Prevent the job from running on every single PR comment unless it's a specific command
+    if: |
+      github.event_name == 'push' || 
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/publish'))
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Execute Logic
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          CURRENT_REPO: ${{ github.repository }}
+          SPRINGBOK_REPO: "Springbok-LLC/cell-kn"
+          NIH_REPO: "NIH-NLM/cell-kn"
+        run: |
+          # 1. THE SYNC: NIH -> Springbok
+          if [ "$CURRENT_REPO" = "$NIH_REPO" ] && [ "${{ github.event_name }}" = "push" ]; then
+            echo "NIH main updated. Force-syncing Springbok/main..."
+            git remote add springbok "https://x-access-token:${GH_TOKEN}@github.com/${SPRINGBOK_REPO}.git"
+            git push springbok main:main --force
+            exit 0
+          fi
+
+          # 2. THE PROPOSAL: Springbok Feature -> NIH PR
+          # Note: We trigger this on PR sync or a specific comment
+          if [ "$CURRENT_REPO" = "$SPRINGBOK_REPO" ] && [ "${{ github.event_name }}" != "push" ]; then
+            
+            # Extract branch and title from PR or Issue context
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              SOURCE_BRANCH="${{ github.event.pull_request.head.ref }}"
+              PR_TITLE="${{ github.event.pull_request.title }}"
+              PR_NUMBER="${{ github.event.pull_request.number }}"
+            else
+              # Logic for issue_comment trigger
+              SOURCE_BRANCH=$(gh pr view ${{ github.event.issue.number }} --json headRefName -q .headRefName)
+              PR_TITLE=$(gh pr view ${{ github.event.issue.number }} --json title -q .title)
+              PR_NUMBER="${{ github.event.issue.number }}"
+            fi
+
+            echo "Proposing $SOURCE_BRANCH to NIH..."
+
+            # Check if PR already exists on NIH
+            # Use the format 'owner:branch' so GitHub finds it on the fork
+            EXISTING_PR=$(gh pr list --repo "$NIH_REPO" --head "Springbok-LLC:$SOURCE_BRANCH" --json number --jq length)
+            
+            if [ "$EXISTING_PR" -eq 0 ]; then
+              gh pr create \
+                --repo "$NIH_REPO" \
+                --head "Springbok-LLC:$SOURCE_BRANCH" \
+                --base main \
+                --title "$PR_TITLE" \
+                --body "Automated proposal from Springbok PR #$PR_NUMBER. AI Review completed in staging."
+            else
+              echo "PR already exists on NIH. NIH automatically updates when you push to the Springbok branch."
+            fi
+          fi
