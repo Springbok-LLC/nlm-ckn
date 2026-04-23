@@ -1,0 +1,59 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_name:
+        description: "Release name (e.g. 2026-04)"
+        required: true
+      results_dirs:
+        description: |
+          Results directories to include, one per line (relative to data/).
+          Leave blank to auto-discover all NSForest results directories.
+        required: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate release config
+        run: |
+          # Build --include flags from multiline input (or leave blank for auto-discover)
+          INCLUDE_FLAGS=""
+          while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            INCLUDE_FLAGS="$INCLUDE_FLAGS --include '$line'"
+          done <<< "${{ inputs.results_dirs }}"
+
+          eval python scripts/release/generate_release.py \
+            --run-name "${{ inputs.run_name }}" \
+            $INCLUDE_FLAGS
+
+      - name: Commit release config
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/prod/release/
+          git commit -m "release: add config for ${{ inputs.run_name }}"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ inputs.run_name }}"
+          git push origin HEAD:main
+          gh release create "$TAG" \
+            --title "Release ${{ inputs.run_name }}" \
+            --notes "Generated release config for run ${{ inputs.run_name }}." \
+            data/prod/release/run-${{ inputs.run_name }}.json \
+            data/prod/release/results-sources-${{ inputs.run_name }}.json \
+            data/prod/release/release-${{ inputs.run_name }}.zip
