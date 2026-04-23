@@ -36,8 +36,10 @@ jobs:
         run: |
           git remote add target https://x-access-token:${SYNC_TOKEN}@github.com/${TARGET_REPO}.git
           git fetch target main
-          if git merge-base --is-ancestor HEAD FETCH_HEAD; then
-            echo "Target main already contains all commits — skipping."
+          HEAD_TREE=$(git rev-parse HEAD^{tree})
+          TARGET_TREE=$(git rev-parse FETCH_HEAD^{tree})
+          if [ "$HEAD_TREE" = "$TARGET_TREE" ]; then
+            echo "Target tree matches — skipping."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 

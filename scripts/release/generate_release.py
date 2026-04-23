@@ -28,8 +28,8 @@ data/prod/release/release-<run-name>.zip
     Flat archive of the ETL-facing data files collected from every included
     results directory (see ZIP_PATTERNS), plus hubmap_urls.txt (one URL per
     line). Files are stored at the top level of the zip; if two datasets
-    produce a file with the same name the results-directory name is prepended
-    to disambiguate.
+    produce a file with the same name the full relative path (with / replaced
+    by __) is prepended to disambiguate.
 
 Usage
 -----
@@ -72,7 +72,7 @@ def discover_results_dirs(data_dir: Path) -> list[str]:
     """Find all results directories under data/prod/ that contain
     NSForest results files (*_results.csv). Returns paths relative to data/."""
     found = []
-    for csv in sorted(data_dir.rglob("*_results.csv")):
+    for csv in sorted((data_dir / "prod").rglob("*_results.csv")):
         rel = csv.parent.relative_to(data_dir)
         if str(rel) not in found:
             found.append(str(rel))
@@ -102,8 +102,10 @@ def build_release_zip(
         for src in _collect_manifest_files(results_sources):
             name = src.name
             if name in seen_names and seen_names[name] != src:
-                # Prefix with the immediate results-dir basename to resolve collision
-                name = f"{src.parent.name}__{name}"
+                rel = src.parent.relative_to(DATA_DIR)
+                name = f"{str(rel).replace('/', '__')}__{src.name}"
+            if name in seen_names and seen_names[name] != src:
+                raise RuntimeError(f"Unresolved zip name collision for {src}")
             seen_names[name] = src
             zf.write(src, arcname=name)
 

@@ -20,40 +20,48 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.SYNC_TOKEN }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Generate release config
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
+          RESULTS_DIRS: ${{ inputs.results_dirs }}
         run: |
-          # Build --include flags from multiline input (or leave blank for auto-discover)
-          INCLUDE_FLAGS=""
+          args=(--run-name "$RUN_NAME")
           while IFS= read -r line; do
             [[ -z "$line" ]] && continue
-            INCLUDE_FLAGS="$INCLUDE_FLAGS --include '$line'"
-          done <<< "${{ inputs.results_dirs }}"
-
-          eval python scripts/release/generate_release.py \
-            --run-name "${{ inputs.run_name }}" \
-            $INCLUDE_FLAGS
+            args+=(--include "$line")
+          done <<< "$RESULTS_DIRS"
+          python scripts/release/generate_release.py "${args[@]}"
 
       - name: Commit release config
+        env:
+          RUN_NAME: ${{ inputs.run_name }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/prod/release/
-          git commit -m "release: add config for ${{ inputs.run_name }}"
+          if ! git diff --cached --quiet; then
+            git commit -m "release: add config for $RUN_NAME"
+          else
+            echo "No release-config changes to commit."
+          fi
 
       - name: Create tag and GitHub Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          RUN_NAME: ${{ inputs.run_name }}
         run: |
-          TAG="v${{ inputs.run_name }}"
+          TAG="v${RUN_NAME}"
           git push origin HEAD:main
           gh release create "$TAG" \
-            --title "Release ${{ inputs.run_name }}" \
-            --notes "Generated release config for run ${{ inputs.run_name }}." \
-            data/prod/release/run-${{ inputs.run_name }}.json \
-            data/prod/release/results-sources-${{ inputs.run_name }}.json \
-            data/prod/release/release-${{ inputs.run_name }}.zip
+            --title "Release ${RUN_NAME}" \
+            --notes "Generated release config for run ${RUN_NAME}." \
+            "data/prod/release/run-${RUN_NAME}.json" \
+            "data/prod/release/results-sources-${RUN_NAME}.json" \
+            "data/prod/release/release-${RUN_NAME}.zip"
