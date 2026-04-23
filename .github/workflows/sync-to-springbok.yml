@@ -11,11 +11,19 @@ on:
 jobs:
   sync-process:
     runs-on: ubuntu-latest
-    # Prevent the job from running on every single PR comment unless it's a specific command
+    # Hardened permissions and trigger logic:
+    # 1. Must be push or PR event OR
+    # 2. Must be a comment on a PR by a trusted member starting with /publish
     if: |
       github.event_name == 'push' || 
       github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/publish'))
+      (
+        github.event.issue.pull_request && 
+        (github.event.comment.author_association == 'OWNER' || 
+         github.event.comment.author_association == 'MEMBER' || 
+         github.event.comment.author_association == 'COLLABORATOR') && 
+        startsWith(github.event.comment.body, '/publish')
+      )
     
     steps:
       - name: Checkout
@@ -30,35 +38,38 @@ jobs:
           CURRENT_REPO: ${{ github.repository }}
           SPRINGBOK_REPO: "Springbok-LLC/cell-kn"
           NIH_REPO: "NIH-NLM/cell-kn"
+          # Injection Protection: Move untrusted context values into env vars
+          RAW_PR_TITLE: ${{ github.event.pull_request.title }}
+          RAW_PR_SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          RAW_PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           # 1. THE SYNC: NIH -> Springbok
           if [ "$CURRENT_REPO" = "$NIH_REPO" ] && [ "${{ github.event_name }}" = "push" ]; then
             echo "NIH main updated. Force-syncing Springbok/main..."
             git remote add springbok "https://x-access-token:${GH_TOKEN}@github.com/${SPRINGBOK_REPO}.git"
-            git push springbok main:main --force
+            # Use HEAD:refs/heads/main to be source-branch agnostic
+            git push springbok HEAD:refs/heads/main --force
             exit 0
           fi
 
           # 2. THE PROPOSAL: Springbok Feature -> NIH PR
-          # Note: We trigger this on PR sync or a specific comment
           if [ "$CURRENT_REPO" = "$SPRINGBOK_REPO" ] && [ "${{ github.event_name }}" != "push" ]; then
             
-            # Extract branch and title from PR or Issue context
+            # Safely assign and quote variables
+            PR_NUMBER="$RAW_PR_NUMBER"
+            
             if [ "${{ github.event_name }}" = "pull_request" ]; then
-              SOURCE_BRANCH="${{ github.event.pull_request.head.ref }}"
-              PR_TITLE="${{ github.event.pull_request.title }}"
-              PR_NUMBER="${{ github.event.pull_request.number }}"
+              SOURCE_BRANCH="$RAW_PR_SOURCE_BRANCH"
+              PR_TITLE="$RAW_PR_TITLE"
             else
-              # Logic for issue_comment trigger
-              SOURCE_BRANCH=$(gh pr view ${{ github.event.issue.number }} --json headRefName -q .headRefName)
-              PR_TITLE=$(gh pr view ${{ github.event.issue.number }} --json title -q .title)
-              PR_NUMBER="${{ github.event.issue.number }}"
+              # Use gh to fetch data for comment triggers to ensure we have the latest PR context
+              SOURCE_BRANCH=$(gh pr view "$PR_NUMBER" --json headRefName -q .headRefName)
+              PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
             fi
 
-            echo "Proposing $SOURCE_BRANCH to NIH..."
+            echo "Proposing branch '$SOURCE_BRANCH' from PR #$PR_NUMBER to NIH..."
 
-            # Check if PR already exists on NIH
-            # Use the format 'owner:branch' so GitHub finds it on the fork
+            # Check if PR already exists on NIH using the Owner:Branch syntax
             EXISTING_PR=$(gh pr list --repo "$NIH_REPO" --head "Springbok-LLC:$SOURCE_BRANCH" --json number --jq length)
             
             if [ "$EXISTING_PR" -eq 0 ]; then
@@ -69,6 +80,6 @@ jobs:
                 --title "$PR_TITLE" \
                 --body "Automated proposal from Springbok PR #$PR_NUMBER. AI Review completed in staging."
             else
-              echo "PR already exists on NIH. NIH automatically updates when you push to the Springbok branch."
+              echo "PR already exists on NIH. NIH will reflect updates pushed to '$SOURCE_BRANCH' automatically."
             fi
           fi
