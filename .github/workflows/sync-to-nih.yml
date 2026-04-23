@@ -8,18 +8,10 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          repositories: cell-kn
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ secrets.SYNC_TOKEN }}
 
       - name: Resolve target repo
         id: target
@@ -40,9 +32,9 @@ jobs:
         id: check
         env:
           TARGET_REPO: ${{ steps.target.outputs.repo }}
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          git remote add target https://x-access-token:${APP_TOKEN}@github.com/${TARGET_REPO}.git
+          git remote add target https://x-access-token:${SYNC_TOKEN}@github.com/${TARGET_REPO}.git
           git fetch target main
           if git merge-base --is-ancestor HEAD FETCH_HEAD; then
             echo "Target main already contains all commits — skipping."
@@ -59,7 +51,7 @@ jobs:
       - name: Open PR in target if none exists
         if: steps.check.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
           TARGET_REPO: ${{ steps.target.outputs.repo }}
           SYNC_BRANCH: ${{ steps.target.outputs.branch }}
           CURRENT_REPO: ${{ github.repository }}
