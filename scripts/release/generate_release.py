@@ -41,8 +41,10 @@ Usage
 
 import argparse
 import json
+import re
 import zipfile
 from pathlib import Path
+from collections import defaultdict
 
 DATA_DIR = Path(__file__).parents[2] / "data"
 RELEASE_DIR = DATA_DIR / "prod" / "release"
@@ -69,24 +71,111 @@ DEFAULT_PATTERNS = {
 
 
 def discover_results_dirs(data_dir: Path) -> list[str]:
-    """Find all results directories under data/prod/ that contain
-    NSForest results files (*_results.csv). Returns paths relative to data/."""
-    found = []
-    for csv in sorted((data_dir / "prod").rglob("*_results.csv")):
+    """Find directories under data/prod/ (excluding the release output dir) that
+    contain CSV files. Returns paths relative to data/."""
+    found = set()
+    for csv in (data_dir / "prod").rglob("*.csv"):
+        if csv.is_relative_to(RELEASE_DIR):
+            continue
         rel = csv.parent.relative_to(data_dir)
-        if str(rel) not in found:
-            found.append(str(rel))
-    return found
+        found.add(str(rel))
+    return sorted(found)
 
 
-def _collect_manifest_files(results_sources: list[dict]) -> list[Path]:
-    """Return files matching ZIP_PATTERNS from each results_dir."""
+def _stem_suffix(f: Path, results_dir: Path) -> str:
+    """Return a grouping key for an unmatched CSV file.
+
+    1. Keyword scan: find the first known semantic segment and return from
+       there (e.g. '_binary_scores.csv').
+    2. Year anchor: find the 4-digit year in the subdirectory name, locate
+       '_{year}_' in the stem, and return everything after it. This strips
+       the organ+dataset prefix regardless of typos or hash suffixes in the
+       directory name (e.g. 'skin_of_body-Erasian-2022' vs filename spelling
+       'Eraslan').
+    3. Last resort: strip the first underscore-delimited token.
+    """
+    KNOWN_KEYWORDS = (
+        "_results",
+        "_harvester_final",
+        "_mapping",
+        "_silhouette",
+        "_master_dataset",
+        "_binary_scores",
+        "_summary",
+    )
+    name = f.name
+    stem = name[: -len(".csv")] if name.endswith(".csv") else name
+
+    for kw in KNOWN_KEYWORDS:
+        idx = stem.find(kw)
+        if idx != -1:
+            return stem[idx:] + ".csv"
+
+    rel = f.relative_to(results_dir)
+    subdir = rel.parts[0] if len(rel.parts) > 1 else results_dir.name
+    year_m = re.search(r"\d{4}", subdir)
+    if year_m:
+        marker = f"_{year_m.group()}_"
+        idx = stem.find(marker)
+        if idx != -1:
+            return stem[idx + len(marker) :] + ".csv"
+
+    parts = stem.split("_", 1)
+    return ("_" + parts[1] + ".csv") if len(parts) == 2 else name
+
+
+def _collect_manifest_files(
+    results_sources: list[dict],
+) -> tuple[list[Path], dict[str, list[str]], list[str]]:
+    """Return (collected_files, unmatched_by_suffix, missing_dirs)."""
     collected: list[Path] = []
+    global_unmatched: dict[str, list[str]] = defaultdict(list)
+    missing_dirs: list[str] = []
+
     for entry in results_sources:
         results_dir = DATA_DIR / entry["results_dir"]
+        if not results_dir.exists():
+            missing_dirs.append(entry["results_dir"])
+            continue
+
+        all_csvs = set(results_dir.rglob("*.csv"))
+        matched_in_dir: set[Path] = set()
+
         for pattern in ZIP_PATTERNS:
-            collected.extend(sorted(results_dir.glob(pattern)))
-    return collected
+            matched_in_dir.update(results_dir.rglob(pattern))
+
+        for f in all_csvs - matched_in_dir:
+            rel = f.relative_to(results_dir)
+            suffix = _stem_suffix(f, results_dir)
+            global_unmatched[suffix].append(f"{entry['results_dir']}/{rel}")
+
+        collected.extend(sorted(matched_in_dir))
+
+    return collected, global_unmatched, missing_dirs
+
+
+def _print_collection_report(
+    unmatched: dict[str, list[str]], missing_dirs: list[str]
+) -> None:
+    if missing_dirs:
+        print("\n" + "=" * 60)
+        print("Missing results directories:")
+        for d in missing_dirs:
+            print(f"  data/{d}")
+        print("=" * 60)
+
+    if unmatched:
+        print("\n" + "=" * 60)
+        print("Unmatched CSV files found across all directories:")
+        print("=" * 60)
+        for suffix, paths in sorted(unmatched.items(), key=lambda x: -len(x[1])):
+            print(f"\n  Pattern: {suffix}  ({len(paths)} occurrences)")
+            limit = 5
+            for p in paths[:limit]:
+                print(f"    - data/{p}")
+            if len(paths) > limit:
+                print(f"    ... and {len(paths) - limit} more.")
+        print("=" * 60 + "\n")
 
 
 def build_release_zip(
@@ -98,8 +187,11 @@ def build_release_zip(
     zip_path = RELEASE_DIR / f"release-{run_name}.zip"
     seen_names: dict[str, Path] = {}
 
+    collected, unmatched, missing_dirs = _collect_manifest_files(results_sources)
+    _print_collection_report(unmatched, missing_dirs)
+
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for src in _collect_manifest_files(results_sources):
+        for src in collected:
             name = src.name
             if name in seen_names and seen_names[name] != src:
                 rel = src.parent.relative_to(DATA_DIR)
@@ -147,7 +239,7 @@ def main():
     if missing:
         raise SystemExit(
             "Results directories not found:\n"
-            + "\n".join(f"  data/{d}" for d in missing)
+            + "\n".join(f"  data/{d}" for d in sorted(missing))
         )
 
     results_sources_filename = f"prod/release/results-sources-{args.run_name}.json"
