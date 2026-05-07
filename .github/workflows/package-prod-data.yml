@@ -18,13 +18,13 @@ jobs:
         env:
           FILENAME: "prod-data-${{ github.ref_name }}.tar.gz"
         run: |
-          SAFE_FILENAME="${FILENAME//\//-}"
+          SAFE_FILENAME=$(printf '%s' "${FILENAME//\//-}" | tr -cd 'A-Za-z0-9._-')
           tar -czf "$SAFE_FILENAME" \
             --exclude="*.html" \
             --exclude="*.svg" \
             --exclude="*.pkl" \
             data/prod/
-          echo "FILENAME=$SAFE_FILENAME" >> "$GITHUB_ENV"
+          printf 'FILENAME=%s\n' "$SAFE_FILENAME" >> "$GITHUB_ENV"
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
@@ -71,14 +71,14 @@ jobs:
           AUTHOR: ${{ matrix.author }}
           FILENAME: "prod-data-${{ matrix.author }}-${{ github.ref_name }}.tar.gz"
         run: |
-          SAFE_FILENAME="${FILENAME//\//-}"
+          SAFE_FILENAME=$(printf '%s' "${FILENAME//\//-}" | tr -cd 'A-Za-z0-9._-')
           find data/prod -type d -name "*${AUTHOR}*" -print0 \
             | tar -czf "$SAFE_FILENAME" \
                 --exclude="*.html" \
                 --exclude="*.svg" \
                 --exclude="*.pkl" \
                 --null -T -
-          echo "FILENAME=$SAFE_FILENAME" >> "$GITHUB_ENV"
+          printf 'FILENAME=%s\n' "$SAFE_FILENAME" >> "$GITHUB_ENV"
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
