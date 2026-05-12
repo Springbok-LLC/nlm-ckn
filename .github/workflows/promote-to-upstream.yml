@@ -22,6 +22,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::UPSTREAM_PR_TOKEN secret is not configured on this fork — see this repo's promote-to-upstream PR for setup instructions."
+            exit 1
+          fi
+
           UPSTREAM=NIH-NLM/nlm-ckn
           FORK=Springbok-LLC/nlm-ckn
 
@@ -41,6 +46,10 @@ jobs:
             exit 0
           fi
 
+          if [ "$BEHIND" != "0" ]; then
+            echo "::warning::Fork is $BEHIND commits behind upstream — the promoted PR may have conflicts requiring manual resolution."
+          fi
+
           EXISTING=$(gh api -X GET "repos/$UPSTREAM/pulls" \
             -F head=Springbok-LLC:main \
             -F base=main \
@@ -53,12 +62,20 @@ jobs:
           fi
 
           echo "Opening upstream PR ($AHEAD ahead, $BEHIND behind)."
+          BODY=$(cat <<EOF
+          Automated promotion from Springbok-LLC fork ($AHEAD commit(s) ahead, $BEHIND behind).
+
+          Awaits the upstream approval requirement; this workflow does not merge.
+
+          Workflow run: https://github.com/$FORK/actions/runs/$GITHUB_RUN_ID
+          EOF
+          )
           for i in 1 2 3; do
             if PR_NUM=$(gh api "repos/$UPSTREAM/pulls" \
                  -f title="Promote Springbok-LLC main to upstream" \
                  -f head="Springbok-LLC:main" \
                  -f base="main" \
-                 -f body="Automated promotion from Springbok-LLC fork. Awaits the upstream approval requirement; this workflow does not merge." \
+                 -f body="$BODY" \
                  --jq '.number'); then
               echo "Created upstream PR #$PR_NUM."
               exit 0
