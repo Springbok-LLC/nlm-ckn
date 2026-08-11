@@ -37,6 +37,11 @@ jobs:
       - name: Build Sphinx documentation
         run: sphinx-build -b html docs docs/_build/html
 
+      # Hits the Pages REST API, which 404s on forks without Pages enabled.
+      - name: Setup Pages
+        if: github.repository_owner == 'NIH-NLM'
+        uses: actions/configure-pages@v4
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
