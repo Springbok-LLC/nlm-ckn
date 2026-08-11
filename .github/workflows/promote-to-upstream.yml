@@ -39,9 +39,26 @@ jobs:
           # ready. No fast-forward via the Refs API either, since that would
           # bypass the approval gate entirely.
 
-          COMPARE=$(gh api "repos/$UPSTREAM/compare/main...Springbok-LLC:main")
-          AHEAD=$(echo "$COMPARE" | jq -r '.ahead_by')
-          BEHIND=$(echo "$COMPARE" | jq -r '.behind_by')
+          # Don't use the compare API (repos/$UPSTREAM/compare/main...fork:main)
+          # for this: it always builds a diff, and since this repo is large, this can fail with
+          # "Sorry, this diff is taking too long to generate" (HTTP 422). Count
+          # the divergence with git instead — a commits-only partial fetch
+          # (--filter=tree:0) of the two tips takes a couple of seconds and a
+          # few hundred KB, and needs no working tree.
+          rm -rf divergence.git
+          git init --bare -q divergence.git
+          git -C divergence.git remote add fork "https://x-access-token:$GH_TOKEN@github.com/$FORK.git"
+          git -C divergence.git remote add upstream "https://x-access-token:$GH_TOKEN@github.com/$UPSTREAM.git"
+          git -C divergence.git fetch -q --filter=tree:0 --no-tags fork main:refs/remotes/fork/main
+          git -C divergence.git fetch -q --filter=tree:0 --no-tags upstream main:refs/remotes/upstream/main
+
+          # rev-list --left-right --count prints "<left> <right>": commits on
+          # upstream/main only (behind), then commits on fork/main only (ahead).
+          COUNTS=$(git -C divergence.git rev-list --left-right --count \
+            refs/remotes/upstream/main...refs/remotes/fork/main)
+          set -- $COUNTS
+          BEHIND=$1
+          AHEAD=$2
           echo "Compare upstream/main...fork/main: ahead_by=$AHEAD, behind_by=$BEHIND"
 
           if [ "$AHEAD" = "0" ]; then
