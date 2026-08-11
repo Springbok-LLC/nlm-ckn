@@ -46,11 +46,15 @@ jobs:
           # (--filter=tree:0) of the two tips takes a couple of seconds and a
           # few hundred KB, and needs no working tree.
           rm -rf divergence.git
+          trap 'rm -rf divergence.git' EXIT
           git init --bare -q divergence.git
-          git -C divergence.git remote add fork "https://x-access-token:$GH_TOKEN@github.com/$FORK.git"
-          git -C divergence.git remote add upstream "https://x-access-token:$GH_TOKEN@github.com/$UPSTREAM.git"
-          git -C divergence.git fetch -q --filter=tree:0 --no-tags fork main:refs/remotes/fork/main
-          git -C divergence.git fetch -q --filter=tree:0 --no-tags upstream main:refs/remotes/upstream/main
+          AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
+            git -C divergence.git fetch -q --filter=tree:0 --no-tags \
+              "https://github.com/$FORK.git" main:refs/remotes/fork/main
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
+            git -C divergence.git fetch -q --filter=tree:0 --no-tags \
+              "https://github.com/$UPSTREAM.git" main:refs/remotes/upstream/main
 
           # rev-list --left-right --count prints "<left> <right>": commits on
           # upstream/main only (behind), then commits on fork/main only (ahead).
