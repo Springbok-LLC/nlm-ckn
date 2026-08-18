@@ -217,11 +217,49 @@ jobs:
       - name: Verify upload
         run: |
           set -euo pipefail
-          uploaded=$(aws s3 ls --recursive "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" | wc -l)
-          local_count=$(find data/prod -type f \( -name '*.svg' -o -name '*.html' \) | wc -l)
+          tmpdir=${RUNNER_TEMP:-/tmp}
+
+          # Compare the two key sets, not just their sizes: a count check passes
+          # whenever the remote total is >= the local total, so N missing uploads
+          # plus N objects left under this tag by an earlier or unrelated run
+          # would cancel out and verify clean.
+          find data/prod -type f \( -name '*.svg' -o -name '*.html' \) \
+            | sed 's|^data/prod/||' \
+            | LC_ALL=C sort > "$tmpdir/local-keys.txt"
+
+          # list-objects-v2 rather than `s3 ls --recursive`: the CLI paginates it
+          # for us and the key comes back as a field of its own, so nothing has
+          # to be parsed back out of the ls line format. Keys within a page are
+          # tab-separated; `None` is what --output text prints for an empty
+          # listing, and is not a key.
+          aws s3api list-objects-v2 \
+            --bucket "$BUCKET" \
+            --prefix "${ASSET_PREFIX}/${RELEASE_TAG}/" \
+            --query 'Contents[].Key' --output text \
+            | tr '\t' '\n' \
+            | sed -e '/^None$/d' -e '/^$/d' -e "s|^${ASSET_PREFIX}/${RELEASE_TAG}/||" \
+            | LC_ALL=C sort > "$tmpdir/remote-keys.txt"
+
+          local_count=$(wc -l < "$tmpdir/local-keys.txt")
+          uploaded=$(wc -l < "$tmpdir/remote-keys.txt")
           echo "Objects under the release prefix: $uploaded (local assets: $local_count)"
-          if [ "$uploaded" -lt "$local_count" ]; then
-            echo "::error::Only $uploaded of $local_count assets are present under ${ASSET_PREFIX}/${RELEASE_TAG}/."
+
+          missing=$(LC_ALL=C comm -23 "$tmpdir/local-keys.txt" "$tmpdir/remote-keys.txt")
+          surplus=$(LC_ALL=C comm -13 "$tmpdir/local-keys.txt" "$tmpdir/remote-keys.txt")
+
+          if [ -n "$missing" ]; then
+            echo "::error::$(printf '%s\n' "$missing" | wc -l) local assets are missing under ${ASSET_PREFIX}/${RELEASE_TAG}/ (first 20 below)."
+            printf '%s\n' "$missing" | sed -n '1,20p'
+          fi
+          if [ -n "$surplus" ]; then
+            # The push role has no s3:DeleteObject by design, so this run cannot
+            # clean the prefix up; removing stale objects is a separate,
+            # privileged operation. Fail rather than publish a prefix that does
+            # not match the tag's tree.
+            echo "::error::$(printf '%s\n' "$surplus" | wc -l) objects under ${ASSET_PREFIX}/${RELEASE_TAG}/ are not in this tag's tree — the prefix was likely written by an earlier or different run. This job cannot delete them (no s3:DeleteObject); clear the prefix out of band, then re-run. First 20 below."
+            printf '%s\n' "$surplus" | sed -n '1,20p'
+          fi
+          if [ -n "$missing" ] || [ -n "$surplus" ]; then
             exit 1
           fi
 
