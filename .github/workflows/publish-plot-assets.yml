@@ -1,0 +1,272 @@
+name: Publish Plot Assets
+
+# Ships the SVG/HTML plot files that package-prod-data.yml deliberately leaves
+# out of the release tarball (~1,840 SVG / ~1,006 HTML, ~5.6 GB) to the shared
+# static-assets S3 bucket, so nlm-ckn-ui can do a fast S3->S3 copy into each
+# environment instead of pulling them out of git.
+# See nlm-ckn-rnd/docs/proposals/static-asset-hosting.md (option B).
+#
+# IMPORTANT: this file's *name* is load-bearing. The push role's trust policy
+# pins on the OIDC `job_workflow_ref` claim, which includes the workflow path
+# (PushWorkflowRefs in nlm-ckn-iac shared/cloudformation/static-assets.yaml).
+# Renaming or moving this file breaks AssumeRole until that parameter is
+# updated to match.
+#
+# Objects are keyed <prefix>/<release tag>/<path relative to data/prod>. The
+# tag is what makes the key unique: the 6-hex suffix in the directory names
+# identifies the CELLxGENE source dataset, not the run, so filenames repeat
+# across releases.
+#
+# Assets are stored gzipped (~5.7 GB -> ~1.5 GB) under their original .svg /
+# .html keys, with Content-Encoding: gzip. Browsers and CloudFront decode
+# transparently. Two consequences worth knowing:
+#   - Anything copying these objects onward must preserve object metadata.
+#     `aws s3 cp --recursive` does by default (MetadataDirective=COPY), which
+#     is what nlm-ckn-ui's deploy-dataset.sh uses for the S3->S3 copy.
+#   - A client that does not send `Accept-Encoding: gzip` receives gzip bytes
+#     as-is. Every browser sends it; bare `curl` does not (use --compressed).
+
+on:
+  release:
+    types: [published]
+  # Manual re-run, e.g. after a failed publish or once the IaC stack lands.
+  # The trust policy also allows job_workflow_ref @refs/heads/main, so this is
+  # only assumable when dispatched from main.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v1.0.0-rc.9)'
+        required: true
+        type: string
+
+# One publish at a time. Don't cancel: a run in flight is partway through
+# thousands of uploads and cancelling just leaves the prefix incomplete.
+concurrency:
+  group: publish-plot-assets
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Generous relative to the expected ~15 min, but note the separate limit
+    # below: the assumed role's credentials are only good for 1 hour from the
+    # "Configure AWS credentials" step, which is why checkout runs before it.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      # Required for the OIDC token; without it the AssumeRole never happens.
+      id-token: write
+    env:
+      # Must match the AssetPrefix parameter in static-assets.yaml: the push
+      # role has s3:PutObject on <bucket>/plots/* and nowhere else.
+      ASSET_PREFIX: plots
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "::error::No release tag resolved from the triggering event."
+            exit 1
+          fi
+          # The tag becomes an S3 key prefix; keep it to characters that need
+          # no escaping anywhere downstream (CloudFront paths, shell, URLs).
+          case "$RELEASE_TAG" in
+            *[!A-Za-z0-9._-]*)
+              echo "::error::Release tag '$RELEASE_TAG' contains characters that are not safe in an S3 key prefix (allowed: A-Z a-z 0-9 . _ -)."
+              exit 1
+              ;;
+          esac
+          echo "Publishing plot assets for tag: $RELEASE_TAG"
+
+      # Sparse, blob-filtered checkout: data/prod is ~7.1 GB on disk (and the
+      # full history is another ~5.6 GB), but only the SVG/HTML are wanted.
+      # --filter=blob:none means git fetches just the blobs the sparse patterns
+      # match, so the h5ad/csv/pkl files are never downloaded at all.
+      - name: Checkout plot assets
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /data/prod/**/*.svg
+            /data/prod/**/*.html
+
+      - name: Inventory assets
+        run: |
+          set -euo pipefail
+          svg_count=$(find data/prod -type f -name '*.svg' | wc -l)
+          html_count=$(find data/prod -type f -name '*.html' | wc -l)
+          echo "SVG files:  $svg_count"
+          echo "HTML files: $html_count"
+          echo "Total size: $(du -sh data/prod | cut -f1)"
+
+          if [ "$svg_count" -eq 0 ] || [ "$html_count" -eq 0 ]; then
+            echo "::error::Expected both SVG and HTML assets under data/prod but found svg=$svg_count html=$html_count — the sparse checkout patterns are probably wrong for this tag."
+            exit 1
+          fi
+
+          # Stash one of each for the post-upload Content-Type check. `sed -n 1p`
+          # rather than `head -1` so the producer isn't SIGPIPE'd under pipefail.
+          {
+            printf 'SAMPLE_SVG_KEY=%s\n' "$(find data/prod -type f -name '*.svg' | sed -n '1p' | sed 's|^data/prod/||')"
+            printf 'SAMPLE_HTML_KEY=%s\n' "$(find data/prod -type f -name '*.html' | sed -n '1p' | sed 's|^data/prod/||')"
+          } >> "$GITHUB_ENV"
+
+      # Runs before the credential step so the CPU time comes out of the job
+      # budget rather than the 1-hour credential window.
+      - name: Compress assets
+        run: |
+          set -euo pipefail
+          before=$(du -sm data/prod | cut -f1)
+
+          # Compressed in place, keeping the original filename: the S3 key stays
+          # <name>.svg / <name>.html and the object carries Content-Encoding:
+          # gzip. Renaming to .gz would change every URL in the plot manifest.
+          #
+          # Left at gzip's default level (6) deliberately — measured across a
+          # sample of these files, -9 gives ~1% more compression for ~2.5x the
+          # CPU. Expected ratios: ~4.4x for SVG, ~3.7x for the plotly HTML.
+          # The inner script is single-quoted on purpose: "$@"/"$f" must be
+          # expanded by the bash xargs spawns, not by this shell.
+          # shellcheck disable=SC2016
+          find data/prod -type f \( -name '*.svg' -o -name '*.html' \) -print0 \
+            | xargs -0 -P "$(nproc)" -n 32 bash -euo pipefail -c '
+                for f in "$@"; do
+                  # Skip anything already gzipped, so the step is re-runnable
+                  # and can never double-compress.
+                  if [ "$(head -c 2 "$f" | od -An -tx1 | tr -d " ")" = "1f8b" ]; then
+                    continue
+                  fi
+                  gzip -c -- "$f" > "$f.gztmp"
+                  mv -- "$f.gztmp" "$f"
+                done
+              ' _
+
+          after=$(du -sm data/prod | cut -f1)
+          echo "data/prod: ${before} MB -> ${after} MB"
+
+      - name: Configure AWS credentials
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4
+        with:
+          # Output of the nlm-ckn-static-assets stack (AssetPushRoleArn).
+          role-to-assume: ${{ secrets.AWS_ASSET_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+          # role-duration-seconds is left at the action's 1-hour default, which
+          # is also the role's MaxSessionDuration — asking for more fails.
+
+      - name: Resolve target bucket
+        env:
+          BUCKET_VAR: ${{ vars.STATIC_ASSETS_BUCKET }}
+          ACCOUNT_ID: ${{ steps.aws-creds.outputs.account-id }}
+        run: |
+          set -euo pipefail
+          # Prefer an explicit repo variable so the bucket can be repointed
+          # without a code change. Otherwise fall back to the stack's naming
+          # convention, ${ProjectName}-static-assets-${AWS::AccountId}, using
+          # the account we just authenticated into rather than a literal id.
+          # (The stack also publishes the name to SSM and as a CloudFormation
+          # export, but the push role has neither ssm:GetParameter nor
+          # cloudformation:ListExports, so neither is readable from here.)
+          if [ -n "${BUCKET_VAR:-}" ]; then
+            bucket="$BUCKET_VAR"
+            echo "Bucket from repo variable STATIC_ASSETS_BUCKET."
+          elif [ -n "${ACCOUNT_ID:-}" ]; then
+            bucket="nlm-ckn-static-assets-${ACCOUNT_ID}"
+            echo "Bucket derived from the authenticated account id."
+          else
+            echo "::error::Could not resolve the static assets bucket — set the STATIC_ASSETS_BUCKET repository variable."
+            exit 1
+          fi
+          echo "Target: s3://${bucket}/${ASSET_PREFIX}/${RELEASE_TAG}/"
+          printf 'BUCKET=%s\n' "$bucket" >> "$GITHUB_ENV"
+
+      - name: Upload SVG assets
+        run: |
+          set -euo pipefail
+          # Default is 10 in-flight requests; these are ~2 MB files and the run
+          # is latency-bound, so raise it to keep the upload well inside the
+          # 1-hour credential window.
+          aws configure set default.s3.max_concurrent_requests 32
+
+          # No --delete anywhere: the role has no s3:DeleteObject by design, so
+          # a release can only add a new tag prefix. --delete would AccessDeny.
+          aws s3 sync data/prod "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" \
+            --exclude '*' --include '*.svg' \
+            --content-type 'image/svg+xml' \
+            --content-encoding gzip \
+            --only-show-errors
+
+      - name: Upload HTML assets
+        run: |
+          set -euo pipefail
+          # Set explicitly rather than trusting the CLI's mimetypes guess: these
+          # are served to browsers through CloudFront, and an octet-stream
+          # fallback would make them download instead of render. The files are
+          # plotly output with <meta charset="utf-8">, hence the charset.
+          aws s3 sync data/prod "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" \
+            --exclude '*' --include '*.html' \
+            --content-type 'text/html; charset=utf-8' \
+            --content-encoding gzip \
+            --only-show-errors
+
+      - name: Verify upload
+        run: |
+          set -euo pipefail
+          uploaded=$(aws s3 ls --recursive "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" | wc -l)
+          local_count=$(find data/prod -type f \( -name '*.svg' -o -name '*.html' \) | wc -l)
+          echo "Objects under the release prefix: $uploaded (local assets: $local_count)"
+          if [ "$uploaded" -lt "$local_count" ]; then
+            echo "::error::Only $uploaded of $local_count assets are present under ${ASSET_PREFIX}/${RELEASE_TAG}/."
+            exit 1
+          fi
+
+          # Queried one field at a time on purpose: `--output text` is
+          # tab-separated, and the HTML Content-Type contains a space, so a
+          # multi-field query can't be split reliably.
+          head_field() {
+            aws s3api head-object --bucket "$BUCKET" \
+              --key "${ASSET_PREFIX}/${RELEASE_TAG}/$1" \
+              --query "$2" --output text
+          }
+
+          check_asset() {
+            key=$1
+            want_type=$2
+            echo "Checking $key"
+
+            actual_type=$(head_field "$key" 'ContentType')
+            if [ "$actual_type" != "$want_type" ]; then
+              echo "::error::Content-Type for $key is '$actual_type', expected '$want_type'."
+              return 1
+            fi
+
+            actual_enc=$(head_field "$key" 'ContentEncoding')
+            if [ "$actual_enc" != "gzip" ]; then
+              echo "::error::Content-Encoding for $key is '$actual_enc', expected 'gzip'."
+              return 1
+            fi
+
+            # Round-trip the real bytes: get-object does not decode, so a
+            # successful gunzip proves the stored object is valid gzip and not,
+            # say, plaintext mislabelled as compressed.
+            tmp=$(mktemp)
+            aws s3api get-object --bucket "$BUCKET" \
+              --key "${ASSET_PREFIX}/${RELEASE_TAG}/$key" "$tmp" > /dev/null
+            if ! gzip -dc < "$tmp" > /dev/null; then
+              echo "::error::$key is not valid gzip despite Content-Encoding: gzip."
+              rm -f "$tmp"
+              return 1
+            fi
+            echo "  Content-Type=$actual_type Content-Encoding=$actual_enc, decompresses cleanly"
+            rm -f "$tmp"
+          }
+
+          check_asset "$SAMPLE_SVG_KEY" 'image/svg+xml'
+          check_asset "$SAMPLE_HTML_KEY" 'text/html; charset=utf-8'
+
+          echo "Published to s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/"
