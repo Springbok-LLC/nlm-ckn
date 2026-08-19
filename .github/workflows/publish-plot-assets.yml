@@ -207,6 +207,7 @@ jobs:
 
           inline = untouched = saved = 0
           deferred = {}  # CDN pages met before any inline copy of their version
+          sample_page = None  # first page actually repointed at _vendor
 
           for path in pages:
               with open(path, "rb") as fh:
@@ -240,6 +241,8 @@ jobs:
               with open(path, "wb") as fh:
                   fh.write(out)
               saved += len(raw) - len(out)
+              if sample_page is None:
+                  sample_page = os.path.relpath(path, ROOT)
 
           cdn = len(pages) - inline - untouched - len(deferred)
           for path, version in sorted(deferred.items()):
@@ -256,6 +259,8 @@ jobs:
                            + script_tag(path, version)
                            + raw[match.end():])
               cdn += 1
+              if sample_page is None:
+                  sample_page = os.path.relpath(path, ROOT)
 
           print("HTML pages:                %d" % len(pages))
           print("  inline bundle stripped:  %d" % inline)
@@ -267,14 +272,18 @@ jobs:
               # lands here, as would a tag whose plots are not plotly output.
               print("Nothing to vendor.")
 
-          # Consumed by the Content-Type spot check in "Verify upload". Empty
-          # when nothing was vendored, which that step treats as "skip".
+          # Consumed by the spot checks in "Verify upload": the vendored bundle
+          # for the Content-Type check, and a page this step actually rewrote
+          # for the relative-src check (an arbitrary page may have no plotly
+          # reference at all). Both are empty when nothing was vendored, which
+          # that step treats as "skip".
           with open(os.environ["GITHUB_ENV"], "a") as fh:
               key = ""
               if vendored:
                   version = sorted(vendored)[0]
                   key = "%s/plotly-%s.min.js" % (VENDOR_SUBDIR, version)
               fh.write("SAMPLE_JS_KEY=%s\n" % key)
+              fh.write("SAMPLE_PLOTLY_HTML_KEY=%s\n" % (sample_page or ""))
           PYTHON
 
       # Runs before the credential step so the CPU time comes out of the job
@@ -372,10 +381,17 @@ jobs:
           # text/javascript rather than application/javascript: the latter was
           # made obsolete by RFC 9239. Sync (not cp) so the step is a no-op when
           # nothing was vendored -- see the note in "Vendor plotly.js".
+          #
+          # immutable is safe here because the key carries the version
+          # (_vendor/plotly-<ver>.min.js) *and* sits under the release tag, so
+          # the bytes behind a given URL never change: a different library means
+          # a different key. Every page in the release pulls this one object, so
+          # it is the single asset where a long cache actually matters.
           aws s3 sync data/prod "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" \
             --exclude '*' --include '*.js' \
             --content-type 'text/javascript; charset=utf-8' \
             --content-encoding gzip \
+            --cache-control 'public, max-age=31536000, immutable' \
             --only-show-errors
 
       - name: Upload HTML assets
@@ -494,9 +510,21 @@ jobs:
           # depth mistake would not show up in any of the checks above: every
           # object would be present and correctly typed, and every plot would
           # still fail to load in the browser. So resolve one for real.
-          html_dir=$(dirname "$SAMPLE_HTML_KEY")
+          #
+          # Deliberately a page "Vendor plotly.js" reported rewriting, not the
+          # arbitrary SAMPLE_HTML_KEY: plots that are not plotly output carry no
+          # <script src> at all, so picking the first HTML file in the tree
+          # would fail this check for a tree that is perfectly correct. Empty
+          # only when nothing was rewritten, same as SAMPLE_JS_KEY.
+          if [ -z "${SAMPLE_PLOTLY_HTML_KEY:-}" ]; then
+            echo "No page was repointed at the vendored bundle; skipping the relative-src check."
+            echo "Published to s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/"
+            exit 0
+          fi
+
+          html_dir=$(dirname "$SAMPLE_PLOTLY_HTML_KEY")
           aws s3api get-object --bucket "$BUCKET" \
-            --key "${ASSET_PREFIX}/${RELEASE_TAG}/${SAMPLE_HTML_KEY}" \
+            --key "${ASSET_PREFIX}/${RELEASE_TAG}/${SAMPLE_PLOTLY_HTML_KEY}" \
             "$tmpdir/sample.html.gz" > /dev/null
           # `|| true` because grep exits 1 on no match, which pipefail would
           # otherwise turn into a step failure before the check below runs.
@@ -506,12 +534,12 @@ jobs:
                 | sed -e 's|^src="||' -e 's|"$||' \
                 | sed -n '1p' || true)
           if [ -z "$src" ]; then
-            echo "::error::No plotly <script src> found in $SAMPLE_HTML_KEY."
+            echo "::error::No plotly <script src> found in $SAMPLE_PLOTLY_HTML_KEY, which the vendor step reported rewriting."
             exit 1
           fi
           case "$src" in
             http*)
-              echo "Note: $SAMPLE_HTML_KEY still loads plotly from $src."
+              echo "Note: $SAMPLE_PLOTLY_HTML_KEY still loads plotly from $src."
               ;;
             *)
               # Normalise "<dir of the page>/<relative src>" the way a browser
@@ -520,7 +548,7 @@ jobs:
                          "$html_dir" "$src")
               echo "Resolving $src from $html_dir -> $resolved"
               if ! grep -qxF "$resolved" "$tmpdir/remote-keys.txt"; then
-                echo "::error::$SAMPLE_HTML_KEY references '$src', which resolves to '$resolved' — not published under ${ASSET_PREFIX}/${RELEASE_TAG}/."
+                echo "::error::$SAMPLE_PLOTLY_HTML_KEY references '$src', which resolves to '$resolved' — not published under ${ASSET_PREFIX}/${RELEASE_TAG}/."
                 exit 1
               fi
               echo "  resolves to a published object"
