@@ -17,7 +17,17 @@ name: Publish Plot Assets
 # identifies the CELLxGENE source dataset, not the run, so filenames repeat
 # across releases.
 #
-# Assets are stored gzipped (~5.7 GB -> ~1.5 GB) under their original .svg /
+# Every plotly page ships with the plotly.js library inlined, so the raw HTML
+# is 923 byte-identical copies of the same 3.6 MB bundle -- 3.1 GB of the
+# 3.6 GB of HTML. The publish vendors one copy to <prefix>/<tag>/_vendor/ and
+# points each page at it with a *document-relative* src ("../../../../_vendor/
+# plotly-<ver>.min.js"). Relative on purpose: the same objects can be served
+# from any number of domains, and from any path prefix within them, without a
+# hostname or a root path baked into a thousand files. What it does assume is
+# that the served URL path mirrors the S3 key layout, which is what the S3->S3
+# copy preserves.
+#
+# Assets are stored gzipped (~2.5 GB -> ~0.5 GB) under their original .svg /
 # .html keys, with Content-Encoding: gzip. Browsers and CloudFront decode
 # transparently. Two consequences worth knowing:
 #   - Anything copying these objects onward must preserve object metadata.
@@ -116,6 +126,157 @@ jobs:
             printf 'SAMPLE_HTML_KEY=%s\n' "$(find data/prod -type f -name '*.html' | sed -n '1p' | sed 's|^data/prod/||')"
           } >> "$GITHUB_ENV"
 
+      # Must run before "Compress assets", which rewrites these files as gzip.
+      # Inline rather than a checked-in script: the sparse checkout above pulls
+      # only *.svg / *.html, and it checks out the *release tag*, so a script in
+      # the tree would be both absent and frozen at whatever the tag contained.
+      - name: Vendor plotly.js
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import hashlib
+          import os
+          import re
+          import sys
+
+          ROOT = "data/prod"
+          VENDOR_SUBDIR = "_vendor"
+
+          # The bundle plotly emits for include_plotlyjs=True. The banner is the
+          # only stable landmark -- the enclosing <script> tag has varied across
+          # plotly versions -- so the span is found by walking out to the tag
+          # delimiters. Safe because minified plotly.js cannot contain a literal
+          # "</script>": the HTML parser would end the script there and no
+          # browser would run the page at all.
+          BANNER = b"* plotly.js v"
+          VERSION_RE = re.compile(rb"\* plotly\.js v([\d.]+)")
+
+          # What include_plotlyjs="cdn" emits, which is how the
+          # silhouette_fscore_summary plots are already built. Repointed at the
+          # vendored copy too, so every plot in a release loads plotly from the
+          # release prefix and none reach out to a third party. Delete this and
+          # its branch below to leave those files on the CDN.
+          CDN_RE = re.compile(
+              rb'<script charset="utf-8" src="https://cdn\.plot\.ly/'
+              rb'plotly-([\d.]+)\.min\.js"></script>'
+          )
+
+          vendored = {}  # version -> md5 of the bytes written to _vendor
+
+
+          def vendor(version, js, path):
+              """Save the library the first time this version is seen."""
+              digest = hashlib.md5(js).hexdigest()
+              if version in vendored:
+                  if vendored[version] != digest:
+                      # Two builds of one version means a single vendored copy
+                      # is wrong for some pages. Refuse rather than serve the
+                      # wrong library.
+                      sys.exit(
+                          "::error::plotly.js v%s is not byte-identical across "
+                          "the tree (%s here, %s earlier): %s"
+                          % (version, digest, vendored[version], path)
+                      )
+                  return
+              dest = os.path.join(ROOT, VENDOR_SUBDIR, "plotly-%s.min.js" % version)
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              # Written before any page is rewritten, so an interrupted run can
+              # never leave pages pointing at a library that was never saved.
+              with open(dest, "wb") as fh:
+                  fh.write(js)
+              vendored[version] = digest
+              print("Vendored plotly.js v%s (%.2f MB, md5 %s)"
+                    % (version, len(js) / 1e6, digest))
+
+
+          def script_tag(path, version):
+              """Document-relative, so no domain or root path is baked in."""
+              depth = os.path.relpath(path, ROOT).count(os.sep)
+              src = "/".join(
+                  [".."] * depth + [VENDOR_SUBDIR, "plotly-%s.min.js" % version]
+              )
+              return b'<script charset="utf-8" src="%s"></script>' % src.encode()
+
+
+          pages = sorted(
+              os.path.join(d, n)
+              for d, _dirs, names in os.walk(ROOT)
+              for n in names
+              if n.endswith(".html")
+          )
+
+          inline = untouched = saved = 0
+          deferred = {}  # CDN pages met before any inline copy of their version
+
+          for path in pages:
+              with open(path, "rb") as fh:
+                  raw = fh.read()
+              i = raw.find(BANNER)
+
+              if i != -1:
+                  start = raw.rfind(b"<script", 0, i)
+                  end = raw.find(b"</script>", i) + len(b"</script>")
+                  if start == -1 or end < i:
+                      sys.exit("::error::Could not delimit the plotly.js "
+                               "<script> in %s" % path)
+                  version = VERSION_RE.search(raw).group(1).decode()
+                  tag = raw[start:end]
+                  vendor(version,
+                         tag[tag.index(b">") + 1:-len(b"</script>")],
+                         path)
+                  inline += 1
+              else:
+                  match = CDN_RE.search(raw)
+                  if not match:
+                      untouched += 1
+                      continue
+                  version = match.group(1).decode()
+                  if version not in vendored:
+                      deferred[path] = version
+                      continue
+                  start, end = match.span()
+
+              out = raw[:start] + script_tag(path, version) + raw[end:]
+              with open(path, "wb") as fh:
+                  fh.write(out)
+              saved += len(raw) - len(out)
+
+          cdn = len(pages) - inline - untouched - len(deferred)
+          for path, version in sorted(deferred.items()):
+              if version not in vendored:
+                  # No inline copy of this version anywhere, so there is nothing
+                  # to point at; leaving the CDN reference is the right outcome.
+                  untouched += 1
+                  continue
+              with open(path, "rb") as fh:
+                  raw = fh.read()
+              match = CDN_RE.search(raw)
+              with open(path, "wb") as fh:
+                  fh.write(raw[:match.start()]
+                           + script_tag(path, version)
+                           + raw[match.end():])
+              cdn += 1
+
+          print("HTML pages:                %d" % len(pages))
+          print("  inline bundle stripped:  %d" % inline)
+          print("  cdn reference rewritten: %d" % cdn)
+          print("  left as-is:              %d" % untouched)
+          print("Removed from HTML: %.2f GB" % (saved / 1024 ** 3))
+          if inline == 0 and cdn == 0:
+              # Not an error: re-running the job over an already-vendored tree
+              # lands here, as would a tag whose plots are not plotly output.
+              print("Nothing to vendor.")
+
+          # Consumed by the Content-Type spot check in "Verify upload". Empty
+          # when nothing was vendored, which that step treats as "skip".
+          with open(os.environ["GITHUB_ENV"], "a") as fh:
+              key = ""
+              if vendored:
+                  version = sorted(vendored)[0]
+                  key = "%s/plotly-%s.min.js" % (VENDOR_SUBDIR, version)
+              fh.write("SAMPLE_JS_KEY=%s\n" % key)
+          PYTHON
+
       # Runs before the credential step so the CPU time comes out of the job
       # budget rather than the 1-hour credential window.
       - name: Compress assets
@@ -133,7 +294,7 @@ jobs:
           # The inner script is single-quoted on purpose: "$@"/"$f" must be
           # expanded by the bash xargs spawns, not by this shell.
           # shellcheck disable=SC2016
-          find data/prod -type f \( -name '*.svg' -o -name '*.html' \) -print0 \
+          find data/prod -type f \( -name '*.svg' -o -name '*.html' -o -name '*.js' \) -print0 \
             | xargs -0 -P "$(nproc)" -n 32 bash -euo pipefail -c '
                 for f in "$@"; do
                   # Skip anything already gzipped, so the step is re-runnable
@@ -162,7 +323,9 @@ jobs:
       - name: Resolve target bucket
         env:
           BUCKET_VAR: ${{ vars.STATIC_ASSETS_BUCKET }}
-          ACCOUNT_ID: ${{ steps.aws-creds.outputs.account-id }}
+          # Output name is `aws-account-id`, not `account-id` — the latter is
+          # silently empty, which turns the fallback into an unconditional error.
+          ACCOUNT_ID: ${{ steps.aws-creds.outputs.aws-account-id }}
         run: |
           set -euo pipefail
           # Prefer an explicit repo variable so the bucket can be repointed
@@ -201,6 +364,20 @@ jobs:
             --content-encoding gzip \
             --only-show-errors
 
+      # Before the HTML, so the library is in place by the time any page that
+      # references it is reachable.
+      - name: Upload vendored plotly.js
+        run: |
+          set -euo pipefail
+          # text/javascript rather than application/javascript: the latter was
+          # made obsolete by RFC 9239. Sync (not cp) so the step is a no-op when
+          # nothing was vendored -- see the note in "Vendor plotly.js".
+          aws s3 sync data/prod "s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/" \
+            --exclude '*' --include '*.js' \
+            --content-type 'text/javascript; charset=utf-8' \
+            --content-encoding gzip \
+            --only-show-errors
+
       - name: Upload HTML assets
         run: |
           set -euo pipefail
@@ -223,7 +400,9 @@ jobs:
           # whenever the remote total is >= the local total, so N missing uploads
           # plus N objects left under this tag by an earlier or unrelated run
           # would cancel out and verify clean.
-          find data/prod -type f \( -name '*.svg' -o -name '*.html' \) \
+          # *.js covers the vendored plotly bundle, which is generated rather
+          # than checked out; leaving it out here would report it as surplus.
+          find data/prod -type f \( -name '*.svg' -o -name '*.html' -o -name '*.js' \) \
             | sed 's|^data/prod/||' \
             | LC_ALL=C sort > "$tmpdir/local-keys.txt"
 
@@ -306,5 +485,46 @@ jobs:
 
           check_asset "$SAMPLE_SVG_KEY" 'image/svg+xml'
           check_asset "$SAMPLE_HTML_KEY" 'text/html; charset=utf-8'
+          # Empty only when "Vendor plotly.js" found nothing to vendor.
+          if [ -n "${SAMPLE_JS_KEY:-}" ]; then
+            check_asset "$SAMPLE_JS_KEY" 'text/javascript; charset=utf-8'
+          fi
+
+          # The pages are useless if their relative src does not resolve, and a
+          # depth mistake would not show up in any of the checks above: every
+          # object would be present and correctly typed, and every plot would
+          # still fail to load in the browser. So resolve one for real.
+          html_dir=$(dirname "$SAMPLE_HTML_KEY")
+          aws s3api get-object --bucket "$BUCKET" \
+            --key "${ASSET_PREFIX}/${RELEASE_TAG}/${SAMPLE_HTML_KEY}" \
+            "$tmpdir/sample.html.gz" > /dev/null
+          # `|| true` because grep exits 1 on no match, which pipefail would
+          # otherwise turn into a step failure before the check below runs.
+          # `sed -n 1p` rather than `head -1` so nothing upstream is SIGPIPE'd.
+          src=$(gzip -dc < "$tmpdir/sample.html.gz" \
+                | grep -o 'src="[^"]*plotly[^"]*"' \
+                | sed -e 's|^src="||' -e 's|"$||' \
+                | sed -n '1p' || true)
+          if [ -z "$src" ]; then
+            echo "::error::No plotly <script src> found in $SAMPLE_HTML_KEY."
+            exit 1
+          fi
+          case "$src" in
+            http*)
+              echo "Note: $SAMPLE_HTML_KEY still loads plotly from $src."
+              ;;
+            *)
+              # Normalise "<dir of the page>/<relative src>" the way a browser
+              # would, then confirm that key is actually in the bucket.
+              resolved=$(python3 -c 'import os,sys; print(os.path.normpath(os.path.join(sys.argv[1], sys.argv[2])))' \
+                         "$html_dir" "$src")
+              echo "Resolving $src from $html_dir -> $resolved"
+              if ! grep -qxF "$resolved" "$tmpdir/remote-keys.txt"; then
+                echo "::error::$SAMPLE_HTML_KEY references '$src', which resolves to '$resolved' — not published under ${ASSET_PREFIX}/${RELEASE_TAG}/."
+                exit 1
+              fi
+              echo "  resolves to a published object"
+              ;;
+          esac
 
           echo "Published to s3://${BUCKET}/${ASSET_PREFIX}/${RELEASE_TAG}/"
